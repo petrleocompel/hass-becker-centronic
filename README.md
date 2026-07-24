@@ -1,7 +1,7 @@
 # Becker Centronic for Home Assistant
 
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![Validate](https://github.com/petrleocompel/ha-becker/actions/workflows/validate.yml/badge.svg)](https://github.com/petrleocompel/ha-becker/actions/workflows/validate.yml)
+[![Validate](https://github.com/petrleocompel/hass-becker-centronic/actions/workflows/validate.yml/badge.svg)](https://github.com/petrleocompel/hass-becker-centronic/actions/workflows/validate.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A modern, UI-first Home Assistant integration for **Becker Centronic** roller
@@ -51,7 +51,7 @@ remote Raspberry Pi** shared over the network.
 ### HACS (recommended)
 
 1. In HACS, open the menu and choose **Custom repositories**.
-2. Add `https://github.com/petrleocompel/ha-becker` with category
+2. Add `https://github.com/petrleocompel/hass-becker-centronic` with category
    **Integration**.
 3. Search for **Becker Centronic**, install it and restart Home Assistant.
 

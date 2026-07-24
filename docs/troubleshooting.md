@@ -87,7 +87,7 @@ uses `kickolduser: true`.
 **Settings → Devices & services → Becker Centronic → ⋮ → Download
 diagnostics** produces a file with the connection state, the unit counters
 and the last 50 sent/received packets - include it when reporting an
-[issue](https://github.com/petrleocompel/ha-becker/issues).
+[issue](https://github.com/petrleocompel/hass-becker-centronic/issues).
 
 ## Migrating from the old becker integration
 
