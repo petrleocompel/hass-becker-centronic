@@ -340,6 +340,16 @@ class BeckerHub:
 
     # Pairing and maintenance
 
+    async def _async_wait_sent(self) -> None:
+        """Wait until all queued packets have been transmitted."""
+        try:
+            async with asyncio.timeout(30):
+                await self._queue.join()
+        except TimeoutError as err:
+            raise HomeAssistantError(
+                "Timeout while sending commands; the stick seems disconnected"
+            ) from err
+
     async def async_train(
         self, unit: int, channel: int, variant: str = DEFAULT_TRAIN_VARIANT
     ) -> None:
@@ -348,23 +358,23 @@ class BeckerHub:
         await self.async_send_sequence(unit, channel, sequence)
         self.store.set_configured(unit)
         # Wait until the sequence has actually been transmitted
-        await self._queue.join()
+        await self._async_wait_sent()
 
     async def async_unpair(self, unit: int, channel: int) -> None:
         """Send a REMOVE sequence while the receiver is in pairing mode."""
         await self.async_send_sequence(unit, channel, REMOVE_SEQUENCE)
-        await self._queue.join()
+        await self._async_wait_sent()
 
     async def async_train_master(self, unit: int, channel: int) -> None:
         """Register the stick as master sender (TRAINMASTER)."""
         await self.async_send_sequence(unit, channel, TRAIN_MASTER_SEQUENCE)
         self.store.set_configured(unit)
-        await self._queue.join()
+        await self._async_wait_sent()
 
     async def async_clear_position(self, unit: int, channel: int) -> None:
         """Send a CLEARPOS sequence (clears end positions in the receiver)."""
         await self.async_send_sequence(unit, channel, CLEARPOS_SEQUENCE)
-        await self._queue.join()
+        await self._async_wait_sent()
 
     async def async_resync(self, unit: int, channel: int) -> None:
         """Force the receiver to re-adopt the current increment.
