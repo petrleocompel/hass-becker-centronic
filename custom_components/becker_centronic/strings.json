@@ -1,0 +1,188 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect the Centronic USB stick",
+        "description": "How is your Becker Centronic USB stick connected?",
+        "menu_options": {
+          "serial": "USB stick on this Home Assistant machine",
+          "socket": "Remote over network (ser2net on a Raspberry Pi or similar)"
+        }
+      },
+      "serial": {
+        "title": "Local USB stick",
+        "description": "Select the serial port of the Centronic USB stick. Prefer the stable `/dev/serial/by-id/...` path so the connection survives reboots.",
+        "data": {
+          "device_path": "Serial device"
+        }
+      },
+      "socket": {
+        "title": "Network serial connection",
+        "description": "Enter the host and port of the machine that shares the USB stick over TCP (e.g. via ser2net). See the [remote serial manual](https://github.com/petrleocompel/ha-becker/blob/main/docs/remote-serial.md) for a step-by-step setup guide.",
+        "data": {
+          "host": "Host",
+          "port": "Port"
+        }
+      },
+      "import_db": {
+        "title": "Import existing pairing data",
+        "description": "A `centronic-stick.db` from a previous Becker installation was found in your configuration folder. Importing its counters keeps all already-paired covers working without re-pairing.",
+        "data": {
+          "import_increments": "Import counters from centronic-stick.db"
+        }
+      },
+      "reconfigure": {
+        "title": "Reconfigure connection",
+        "description": "Change how the Centronic USB stick is connected. Pairing data is kept.",
+        "menu_options": {
+          "serial": "USB stick on this Home Assistant machine",
+          "socket": "Remote over network (ser2net on a Raspberry Pi or similar)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect. Check that the device path or host/port is correct, the stick is plugged in and no other software is using it."
+    },
+    "abort": {
+      "already_configured": "This stick is already configured.",
+      "reconfigure_successful": "Connection updated."
+    }
+  },
+  "config_subentries": {
+    "cover": {
+      "initiate_flow": {
+        "user": "Add cover",
+        "reconfigure": "Configure cover"
+      },
+      "entry_type": "Cover",
+      "step": {
+        "user": {
+          "title": "Add a Becker cover",
+          "description": "The stick emulates 5 remote units with 7 channels each. Pick a free unit/channel for this cover.\n\nChannels already in use: {used_channels}",
+          "data": {
+            "name": "Name",
+            "unit": "Unit",
+            "channel": "Channel",
+            "device_class": "Cover type",
+            "already_paired": "This channel is already paired with the cover"
+          },
+          "data_description": {
+            "already_paired": "Enable if the stick already controls this cover (e.g. after importing an existing centronic-stick.db)."
+          }
+        },
+        "pair": {
+          "title": "Pair with the cover",
+          "description": "1. Put the cover into pairing mode: press and hold the program button on its **master remote** (or wall transmitter) until the cover confirms with a single *clack*.\n2. Then press **Submit** within a few seconds - the stick will send the pairing broadcast to unit {unit}, channel {channel} (sequence variant: {variant})."
+        },
+        "pair_confirm": {
+          "title": "Did the cover confirm?",
+          "description": "After a successful pairing the cover confirms with a single *clack* followed by a double *clack-clack*.",
+          "menu_options": {
+            "pair_done": "Yes - the cover confirmed (clack, clack-clack)",
+            "pair_retry": "No - try again with the same sequence",
+            "pair_retry_alt": "No - try an alternative pairing sequence"
+          }
+        },
+        "settings": {
+          "title": "Cover behavior",
+          "description": "All settings are optional and can be changed later. Travel times enable position tracking and the position slider.",
+          "data": {
+            "travelling_time_up": "Travel time up",
+            "travelling_time_down": "Travel time down",
+            "tilt_mode": "Tilt buttons behavior",
+            "track_intermediate": "Track intermediate positions from remotes",
+            "intermediate_position_up": "Intermediate position up (0-100)",
+            "intermediate_position_down": "Intermediate position down (0-100)",
+            "tilt_time_blind": "Blind tilt time",
+            "remote_ids": "Remote IDs to track",
+            "value_template": "Position value template"
+          },
+          "data_description": {
+            "travelling_time_up": "Seconds the cover needs from fully closed to fully open.",
+            "travelling_time_down": "Seconds from fully open to fully closed (defaults to travel time up).",
+            "tilt_mode": "'Intermediate positions' drives to the programmed intermediate positions, 'Blind tilt' does a short move to tilt slats.",
+            "intermediate_position_up": "Position reached by a double-tap UP on the remote (0 = closed, 100 = open).",
+            "intermediate_position_down": "Position reached by a double-tap DOWN on the remote.",
+            "remote_ids": "Comma separated list like '12345:2'. Find the IDs in the debug log when pressing remote buttons.",
+            "value_template": "Optional template that overrides the position, e.g. from a window sensor."
+          }
+        },
+        "reconfigure": {
+          "title": "Cover behavior",
+          "description": "Adjust the behavior of this cover. Unit and channel cannot be changed - add a new cover instead.",
+          "data": {
+            "travelling_time_up": "Travel time up",
+            "travelling_time_down": "Travel time down",
+            "tilt_mode": "Tilt buttons behavior",
+            "track_intermediate": "Track intermediate positions from remotes",
+            "intermediate_position_up": "Intermediate position up (0-100)",
+            "intermediate_position_down": "Intermediate position down (0-100)",
+            "tilt_time_blind": "Blind tilt time",
+            "remote_ids": "Remote IDs to track",
+            "value_template": "Position value template"
+          }
+        }
+      },
+      "error": {
+        "channel_in_use": "This unit/channel combination is already used by another cover.",
+        "invalid_remote_id": "Remote IDs must look like '12345:2' (5 hex digits, colon, channel), separated by commas."
+      },
+      "abort": {
+        "entry_not_loaded": "The Centronic stick is not connected. Fix the connection first, then add covers.",
+        "reconfigure_successful": "Cover settings updated."
+      }
+    }
+  },
+  "selector": {
+    "device_class": {
+      "options": {
+        "shutter": "Roller shutter",
+        "blind": "Venetian blind",
+        "awning": "Awning / sun protection",
+        "window": "Roof window (e.g. Roto)",
+        "shade": "Shade"
+      }
+    },
+    "tilt_mode": {
+      "options": {
+        "none": "No tilt buttons",
+        "intermediate": "Intermediate positions (double-tap positions)",
+        "blind": "Blind tilt (short move)"
+      }
+    }
+  },
+  "entity": {
+    "button": {
+      "resync": {
+        "name": "Resync"
+      }
+    }
+  },
+  "services": {
+    "resync": {
+      "name": "Resync",
+      "description": "Repeats the STOP command 3 times so the receiver re-adopts the stick's rolling code counter. Use when a cover stopped responding to the stick."
+    },
+    "unpair": {
+      "name": "Unpair",
+      "description": "Removes the stick from the cover's paired senders. Put the cover into pairing mode with its master remote first."
+    },
+    "pair_master": {
+      "name": "Pair as master",
+      "description": "Registers the stick as the master sender of the cover (advanced). Put the cover into pairing mode first."
+    },
+    "clear_position": {
+      "name": "Clear end positions",
+      "description": "Clears the end positions stored in the cover's receiver (advanced). Put the cover into pairing mode first."
+    }
+  },
+  "device_automation": {
+    "trigger_type": {
+      "remote_up": "Remote command up received",
+      "remote_down": "Remote command down received",
+      "remote_halt": "Remote command stop received",
+      "remote_up_intermediate": "Remote command intermediate up received",
+      "remote_down_intermediate": "Remote command intermediate down received"
+    }
+  }
+}

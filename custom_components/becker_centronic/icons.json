@@ -1,0 +1,23 @@
+{
+  "entity": {
+    "button": {
+      "resync": {
+        "default": "mdi:sync"
+      }
+    }
+  },
+  "services": {
+    "resync": {
+      "service": "mdi:sync"
+    },
+    "unpair": {
+      "service": "mdi:link-off"
+    },
+    "pair_master": {
+      "service": "mdi:crown"
+    },
+    "clear_position": {
+      "service": "mdi:arrow-expand-vertical"
+    }
+  }
+}

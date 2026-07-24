@@ -1,0 +1,23 @@
+resync:
+  target:
+    entity:
+      integration: becker_centronic
+      domain: cover
+
+unpair:
+  target:
+    entity:
+      integration: becker_centronic
+      domain: cover
+
+pair_master:
+  target:
+    entity:
+      integration: becker_centronic
+      domain: cover
+
+clear_position:
+  target:
+    entity:
+      integration: becker_centronic
+      domain: cover
