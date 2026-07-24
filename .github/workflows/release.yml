@@ -17,6 +17,6 @@ jobs:
         working-directory: custom_components/becker_centronic
         run: zip -r becker_centronic.zip . -x "__pycache__/*"
       - name: Upload release asset
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: custom_components/becker_centronic/becker_centronic.zip
