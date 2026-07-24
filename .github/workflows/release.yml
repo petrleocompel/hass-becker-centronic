@@ -12,7 +12,7 @@ jobs:
     name: Attach component zip
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Create zip
         working-directory: custom_components/becker_centronic
         run: zip -r becker_centronic.zip . -x "__pycache__/*"
