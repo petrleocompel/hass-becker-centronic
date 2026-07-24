@@ -18,7 +18,7 @@
       },
       "socket": {
         "title": "Network serial connection",
-        "description": "Enter the host and port of the machine that shares the USB stick over TCP (e.g. via ser2net). See the [remote serial manual](https://github.com/petrleocompel/hass-becker-centronic/blob/main/docs/remote-serial.md) for a step-by-step setup guide.",
+        "description": "Enter the host and port of the machine that shares the USB stick over TCP (e.g. via ser2net). See the [remote serial manual]({docs_url}) for a step-by-step setup guide.",
         "data": {
           "host": "Host",
           "port": "Port"

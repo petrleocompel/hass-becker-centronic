@@ -66,6 +66,10 @@ _LOGGER = logging.getLogger(__name__)
 
 LEGACY_DB_FILENAME = "centronic-stick.db"
 
+DOCS_REMOTE_SERIAL_URL = (
+    "https://github.com/petrleocompel/hass-becker-centronic/blob/main/docs/remote-serial.md"
+)
+
 REMOTE_ID_RE = re.compile(r"^[0-9A-Fa-f]{5}:[0-9A-Fa-f]$")
 
 DEVICE_CLASSES = ["shutter", "blind", "awning", "window", "shade"]
@@ -202,7 +206,10 @@ class BeckerConfigFlow(ConfigFlow, domain=DOMAIN):
             }
         )
         return self.async_show_form(
-            step_id="socket", data_schema=schema, errors=errors
+            step_id="socket",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders={"docs_url": DOCS_REMOTE_SERIAL_URL},
         )
 
     async def _async_finish_connection(
