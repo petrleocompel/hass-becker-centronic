@@ -1,0 +1,14 @@
+{
+  "domain": "becker_centronic",
+  "name": "Becker Centronic",
+  "codeowners": ["@petrleocompel"],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/petrleocompel/ha-becker",
+  "integration_type": "hub",
+  "iot_class": "assumed_state",
+  "issue_tracker": "https://github.com/petrleocompel/ha-becker/issues",
+  "loggers": ["custom_components.becker_centronic"],
+  "requirements": ["pyserial==3.5", "pyserial-asyncio-fast==0.16"],
+  "version": "0.1.0"
+}
