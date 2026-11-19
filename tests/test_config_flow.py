@@ -264,3 +264,106 @@ async def test_add_cover_invalid_remote_id(hass: HomeAssistant) -> None:
     )
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"remote_ids": "invalid_remote_id"}
+
+
+def _schema_defaults(result) -> dict:
+    return {
+        str(key): key.default()
+        for key in result["data_schema"].schema
+        if callable(key.default)
+    }
+
+
+async def _add_cover(hass, entry, unit: str, channel: str, name: str) -> None:
+    result = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, "cover"), context={"source": config_entries.SOURCE_USER}
+    )
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        {**COVER_USER_INPUT, "name": name, "unit": unit, "channel": channel},
+    )
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], COVER_SETTINGS_INPUT
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+
+
+async def test_suggests_a_unit_of_its_own(hass: HomeAssistant) -> None:
+    """Covers get their own unit while one is free, then free channels."""
+    entry = await _setup_stick_entry(hass)
+    for unit in ("1", "2", "3", "4", "5"):
+        result = await hass.config_entries.subentries.async_init(
+            (entry.entry_id, "cover"), context={"source": config_entries.SOURCE_USER}
+        )
+        defaults = _schema_defaults(result)
+        assert (defaults["unit"], defaults["channel"]) == (unit, "1")
+        await _add_cover(hass, entry, unit, "1", f"Cover {unit}")
+
+    result = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, "cover"), context={"source": config_entries.SOURCE_USER}
+    )
+    defaults = _schema_defaults(result)
+    assert (defaults["unit"], defaults["channel"]) == ("1", "2")
+
+
+async def test_reconfigure_settings(hass: HomeAssistant) -> None:
+    """The settings form is still reachable from the reconfigure menu."""
+    entry = await _setup_stick_entry(hass)
+    await _add_cover(hass, entry, "1", "1", "Kitchen")
+    subentry = next(iter(entry.subentries.values()))
+
+    result = await entry.start_subentry_reconfigure_flow(hass, subentry.subentry_id)
+    assert result["type"] is FlowResultType.MENU
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], {"next_step_id": "reconfigure_settings"}
+    )
+    assert result["step_id"] == "reconfigure_settings"
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], {**COVER_SETTINGS_INPUT, "travelling_time_up": 12.0}
+    )
+    assert result["type"] is FlowResultType.ABORT
+    assert entry.subentries[subentry.subentry_id].data["travelling_time_up"] == 12.0
+
+
+async def test_repair_keeps_the_subentry(hass: HomeAssistant) -> None:
+    """Pairing again from reconfigure updates the same subentry in place."""
+    entry = await _setup_stick_entry(hass)
+    await _add_cover(hass, entry, "1", "1", "Kitchen")
+    await _add_cover(hass, entry, "1", "2", "Office")
+    subentry = next(s for s in entry.subentries.values() if s.title == "Office")
+    hub = MagicMock()
+    hub.async_train = AsyncMock()
+    entry.runtime_data = hub
+
+    result = await entry.start_subentry_reconfigure_flow(hass, subentry.subentry_id)
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], {"next_step_id": "repair"}
+    )
+    assert result["step_id"] == "repair"
+    assert _schema_defaults(result) == {"unit": "1", "channel": "2"}
+
+    # Another cover's unit/channel is refused
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], {"unit": "1", "channel": "1"}
+    )
+    assert result["errors"] == {"base": "channel_in_use"}
+
+    # Move the cover to a unit of its own
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], {"unit": "2", "channel": "1"}
+    )
+    assert result["step_id"] == "pair"
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], {}
+    )
+    hub.async_train.assert_awaited_once_with(2, 1, "double_tap")
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], {"next_step_id": "pair_done"}
+    )
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reconfigure_successful"
+
+    updated = entry.subentries[subentry.subentry_id]
+    assert updated.title == "Office"
+    assert updated.unique_id == "2:1"
+    assert updated.data == {**subentry.data, "unit": 2, "channel": 1}

@@ -58,7 +58,9 @@ async def _wait_for_write(writer, minimum_calls: int = 1) -> None:
     )
 
 
-async def _setup_entry(hass: HomeAssistant, hass_storage: dict) -> MockConfigEntry:
+async def _setup_entry(
+    hass: HomeAssistant, hass_storage: dict, channels: dict[str, int] | None = None
+) -> MockConfigEntry:
     entry = MockConfigEntry(
         domain=DOMAIN,
         data=SOCKET_DATA,
@@ -67,12 +69,17 @@ async def _setup_entry(hass: HomeAssistant, hass_storage: dict) -> MockConfigEnt
         unique_id="pi.local:5000",
         subentries_data=[COVER_SUBENTRY],
     )
-    # Pre-configure unit 1 so setup does not run the 5x init-sync ritual
+    # Pre-configure unit 1, with channel 2 in sync unless told otherwise
     hass_storage[f"{DOMAIN}.test_stick"] = {
         "version": 1,
         "data": {
             "units": {
-                "1": {"code": "1737B", "increment": 100, "configured": True},
+                "1": {
+                    "code": "1737B",
+                    "increment": 100,
+                    "configured": True,
+                    "channels": {"2": 99} if channels is None else channels,
+                },
             }
         },
     }
@@ -155,20 +162,60 @@ async def test_value_template_sets_position(
     assert state.attributes["current_position"] == 42
 
 
+@pytest.fixture
+def no_resync_delay():
+    """Skip the 0.5-0.9 s pauses of the resync ritual."""
+    with patch("custom_components.becker_centronic.hub.randrange", return_value=0):
+        yield
+
+
 async def test_resync_service(
-    hass: HomeAssistant, hass_storage: dict, mock_stick
+    hass: HomeAssistant, hass_storage: dict, mock_stick, no_resync_delay
 ) -> None:
-    """The resync entity service sends HALT three times."""
+    """The resync entity service sends HALT five times."""
     _reader, writer = mock_stick
     await _setup_entry(hass, hass_storage)
 
     await hass.services.async_call(
         DOMAIN, "resync", {"entity_id": "cover.kitchen"}, blocking=True
     )
-    await _wait_for_write(writer, minimum_calls=3)
+    await _wait_for_write(writer, minimum_calls=5)
     sent = [call.args[0] for call in writer.write.call_args_list]
     assert sent == [
-        encode_packet("1737B", 100, 2, Command.HALT),
-        encode_packet("1737B", 101, 2, Command.HALT),
-        encode_packet("1737B", 102, 2, Command.HALT),
+        encode_packet("1737B", increment, 2, Command.HALT)
+        for increment in range(100, 105)
     ]
+
+
+@pytest.mark.parametrize("channels", [{"2": 40, "3": 99}, {}])
+async def test_command_resyncs_receiver_first_when_out_of_window(
+    hass: HomeAssistant, hass_storage: dict, mock_stick, no_resync_delay, channels
+) -> None:
+    """Sibling traffic (or unknown history) on a shared unit triggers a resync."""
+    _reader, writer = mock_stick
+    await _setup_entry(hass, hass_storage, channels=channels)
+
+    await hass.services.async_call(
+        "cover", "open_cover", {"entity_id": "cover.kitchen"}, blocking=True
+    )
+    await _wait_for_write(writer, minimum_calls=6)
+    sent = [call.args[0] for call in writer.write.call_args_list]
+    assert sent == [
+        *(
+            encode_packet("1737B", increment, 2, Command.HALT)
+            for increment in range(100, 105)
+        ),
+        encode_packet("1737B", 105, 2, Command.UP),
+    ]
+
+
+async def test_resync_button_follows_connection(
+    hass: HomeAssistant, hass_storage: dict, mock_stick
+) -> None:
+    """The resync button becomes available once the stick connects."""
+    await _setup_entry(hass, hass_storage)
+    for _ in range(50):
+        if hass.states.get("button.kitchen_resync").state != "unavailable":
+            break
+        await asyncio.sleep(0.05)
+    assert hass.states.get("button.kitchen_resync").state != "unavailable"

@@ -5,8 +5,9 @@ from __future__ import annotations
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigSubentry
 from homeassistant.const import EntityCategory
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import BeckerConfigEntry
@@ -49,11 +50,23 @@ class BeckerResyncButton(ButtonEntity):
             model="Centronic cover",
         )
 
+    async def async_added_to_hass(self) -> None:
+        """Follow the stick's connection state."""
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass, self._hub.signal_connection, self._async_connection_changed
+            )
+        )
+
     @property
     def available(self) -> bool:
         """Button is available when the stick is connected."""
         return self._hub.connected
 
+    @callback
+    def _async_connection_changed(self, _connected: bool) -> None:
+        self.async_write_ha_state()
+
     async def async_press(self) -> None:
-        """Send HALT 3x so the receiver re-adopts the increment counter."""
+        """Send HALTs so the receiver re-adopts the increment counter."""
         await self._hub.async_resync(self._unit, self._channel)

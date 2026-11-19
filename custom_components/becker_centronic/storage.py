@@ -21,7 +21,9 @@ from .protocol import INCREMENT_MAX, NUM_UNITS, unit_code_for
 _LOGGER = logging.getLogger(__name__)
 
 STORAGE_VERSION = 1
-SAVE_DELAY = 2.0
+# Persist on the next loop iteration: a counter that was transmitted but not
+# saved is reused after a crash, and receivers ignore reused increments.
+SAVE_DELAY = 0
 
 
 class UnitData(TypedDict):
@@ -30,6 +32,10 @@ class UnitData(TypedDict):
     code: str
     increment: int
     configured: bool
+    # Last increment transmitted per channel ("1".."7"). All channels of a unit
+    # share one counter, so a receiver sees the counter jump by every frame
+    # sent to its sibling channels in the meantime.
+    channels: dict[str, int]
 
 
 class UnitStore:
@@ -50,20 +56,29 @@ class UnitStore:
             stored = stored_units.get(str(unit))
             if stored is None:
                 self._units[unit] = UnitData(
-                    code=unit_code_for(unit), increment=0, configured=False
+                    code=unit_code_for(unit), increment=0, configured=False, channels={}
                 )
             else:
                 self._units[unit] = UnitData(
                     code=stored.get("code", unit_code_for(unit)),
                     increment=int(stored.get("increment", 0)),
                     configured=bool(stored.get("configured", False)),
+                    channels={
+                        str(channel): int(increment)
+                        for channel, increment in stored.get("channels", {}).items()
+                    },
                 )
 
     def _schedule_save(self) -> None:
         self._store.async_delay_save(self._data_to_save, SAVE_DELAY)
 
     def _data_to_save(self) -> dict[str, Any]:
-        return {"units": {str(unit): dict(data) for unit, data in self._units.items()}}
+        return {
+            "units": {
+                str(unit): {**data, "channels": dict(data["channels"])}
+                for unit, data in self._units.items()
+            }
+        }
 
     async def async_save_now(self) -> None:
         """Persist immediately (used on unload)."""
@@ -85,13 +100,25 @@ class UnitStore:
         """Return the current increment of a unit without consuming it."""
         return self._units[unit]["increment"]
 
-    def take_increment(self, unit: int) -> int:
-        """Return the current increment and advance the counter."""
+    def take_increment(self, unit: int, channel: int) -> int:
+        """Return the current increment, advance the counter, remember the channel."""
         data = self._units[unit]
         increment = data["increment"]
         data["increment"] = (increment + 1) & INCREMENT_MAX
+        data["channels"][str(channel)] = increment
         self._schedule_save()
         return increment
+
+    def channel_gap(self, unit: int, channel: int) -> int | None:
+        """Return how far the next increment is ahead of the channel's last one.
+
+        None if nothing has been sent on the channel yet (e.g. after upgrading).
+        """
+        data = self._units[unit]
+        last = data["channels"].get(str(channel))
+        if last is None:
+            return None
+        return (data["increment"] - last) & INCREMENT_MAX
 
     def seed_unit(self, unit: int) -> None:
         """Mark a fresh unit as configured with a random start increment."""
@@ -126,6 +153,7 @@ class UnitStore:
                 code=str(code).upper(),
                 increment=int(increment) & INCREMENT_MAX,
                 configured=bool(configured),
+                channels={},
             )
             imported = True
             _LOGGER.info(

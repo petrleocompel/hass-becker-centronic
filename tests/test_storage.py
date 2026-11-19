@@ -22,13 +22,30 @@ async def test_take_increment_advances_and_wraps(hass: HomeAssistant) -> None:
     """take_increment returns the current value and advances the counter."""
     store = UnitStore(hass, "test_entry")
     await store.async_load()
-    assert store.take_increment(1) == 0
-    assert store.take_increment(1) == 1
+    assert store.take_increment(1, 1) == 0
+    assert store.take_increment(1, 1) == 1
     assert store.current_increment(1) == 2
 
     store._units[2]["increment"] = 0xFFFF
-    assert store.take_increment(2) == 0xFFFF
+    assert store.take_increment(2, 1) == 0xFFFF
     assert store.current_increment(2) == 0
+
+
+async def test_channel_gap_counts_sibling_frames(hass: HomeAssistant) -> None:
+    """The gap of a channel grows with every frame sent on its siblings."""
+    store = UnitStore(hass, "test_entry")
+    await store.async_load()
+    assert store.channel_gap(1, 4) is None
+    store.take_increment(1, 4)
+    assert store.channel_gap(1, 4) == 1
+    for _ in range(49):
+        store.take_increment(1, 1)
+    assert store.channel_gap(1, 4) == 50
+    assert store.channel_gap(1, 1) == 1
+
+    store._units[1]["increment"] = 2
+    store._units[1]["channels"]["4"] = 0xFFFE
+    assert store.channel_gap(1, 4) == 4
 
 
 async def test_seed_unit(hass: HomeAssistant) -> None:
@@ -82,6 +99,7 @@ async def test_save_and_reload(hass: HomeAssistant) -> None:
     store = UnitStore(hass, "test_entry")
     await store.async_load()
     store.seed_unit(1)
+    store.take_increment(1, 3)
     increment = store.current_increment(1)
     await store.async_save_now()
 
@@ -89,3 +107,16 @@ async def test_save_and_reload(hass: HomeAssistant) -> None:
     await store2.async_load()
     assert store2.is_configured(1)
     assert store2.current_increment(1) == increment
+    assert store2.channel_gap(1, 3) == 1
+
+
+async def test_load_data_without_channels(hass: HomeAssistant, hass_storage) -> None:
+    """Data saved before per-channel tracking loads with an unknown gap."""
+    hass_storage["becker_centronic.test_entry"] = {
+        "version": 1,
+        "data": {"units": {"1": {"code": "1737B", "increment": 7, "configured": True}}},
+    }
+    store = UnitStore(hass, "test_entry")
+    await store.async_load()
+    assert store.current_increment(1) == 7
+    assert store.channel_gap(1, 1) is None

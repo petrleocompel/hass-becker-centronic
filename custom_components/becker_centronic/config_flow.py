@@ -9,6 +9,7 @@ from typing import Any
 
 import voluptuous as vol
 from homeassistant.config_entries import (
+    SOURCE_RECONFIGURE,
     ConfigEntry,
     ConfigEntryState,
     ConfigFlow,
@@ -108,6 +109,34 @@ def _default_port(options: list[SelectOptionDict]) -> str | None:
         if "BECKER" in label or "CENTRONIC" in label:
             return option["value"]
     return None
+
+
+def _unit_channel_fields(unit: int, channel: int) -> dict[vol.Required, Any]:
+    """Build unit and channel dropdowns preset to the given combination."""
+    return {
+        vol.Required(CONF_UNIT, default=str(unit)): SelectSelector(
+            SelectSelectorConfig(
+                options=[
+                    SelectOptionDict(value=str(option), label=f"Unit {option}")
+                    for option in range(1, NUM_UNITS + 1)
+                ],
+                mode=SelectSelectorMode.DROPDOWN,
+            )
+        ),
+        vol.Required(CONF_CHANNEL, default=str(channel)): SelectSelector(
+            SelectSelectorConfig(
+                options=[
+                    SelectOptionDict(value=str(option), label=f"Channel {option}")
+                    for option in VALID_CHANNELS
+                ],
+                mode=SelectSelectorMode.DROPDOWN,
+            )
+        ),
+    }
+
+
+def _format_used(used: set[tuple[int, int]]) -> str:
+    return ", ".join(f"{unit}:{channel}" for unit, channel in sorted(used)) or "-"
 
 
 class BeckerConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -288,8 +317,17 @@ class CoverSubentryFlow(ConfigSubentryFlow):
         }
 
     def _suggested_unit_channel(self) -> tuple[int, int]:
-        """Suggest the next free unit/channel combination."""
+        """Suggest a unit no other cover uses, else the next free combination.
+
+        All channels of a unit share one rolling counter, so every command to
+        one cover moves the counter its siblings' receivers see next. A unit of
+        its own keeps each receiver inside its acceptance window.
+        """
         used = self._used_channels()
+        used_units = {unit for unit, _ in used}
+        for unit in range(1, NUM_UNITS + 1):
+            if unit not in used_units:
+                return unit, VALID_CHANNELS[0]
         for unit in range(1, NUM_UNITS + 1):
             for channel in VALID_CHANNELS:
                 if (unit, channel) not in used:
@@ -321,33 +359,11 @@ class CoverSubentryFlow(ConfigSubentryFlow):
                     return await self.async_step_settings()
                 return await self.async_step_pair()
 
-        suggested_unit, suggested_channel = self._suggested_unit_channel()
         used = self._used_channels()
-        unit_options = [
-            SelectOptionDict(value=str(unit), label=f"Unit {unit}")
-            for unit in range(1, NUM_UNITS + 1)
-        ]
-        channel_options = [
-            SelectOptionDict(value=str(channel), label=f"Channel {channel}")
-            for channel in VALID_CHANNELS
-        ]
         schema = vol.Schema(
             {
                 vol.Required("name"): TextSelector(),
-                vol.Required(
-                    CONF_UNIT, default=str(suggested_unit)
-                ): SelectSelector(
-                    SelectSelectorConfig(
-                        options=unit_options, mode=SelectSelectorMode.DROPDOWN
-                    )
-                ),
-                vol.Required(
-                    CONF_CHANNEL, default=str(suggested_channel)
-                ): SelectSelector(
-                    SelectSelectorConfig(
-                        options=channel_options, mode=SelectSelectorMode.DROPDOWN
-                    )
-                ),
+                **_unit_channel_fields(*self._suggested_unit_channel()),
                 vol.Required(
                     CONF_DEVICE_CLASS, default="shutter"
                 ): SelectSelector(
@@ -364,12 +380,7 @@ class CoverSubentryFlow(ConfigSubentryFlow):
             step_id="user",
             data_schema=schema,
             errors=errors,
-            description_placeholders={
-                "used_channels": ", ".join(
-                    f"{unit}:{channel}" for unit, channel in sorted(used)
-                )
-                or "-"
-            },
+            description_placeholders={"used_channels": _format_used(used)},
         )
 
     async def async_step_pair(
@@ -421,7 +432,14 @@ class CoverSubentryFlow(ConfigSubentryFlow):
     async def async_step_pair_done(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
-        """Pairing confirmed, continue with settings."""
+        """Pairing confirmed, continue with settings (or keep the existing ones)."""
+        if self.source == SOURCE_RECONFIGURE:
+            return self.async_update_and_abort(
+                self._get_entry(),
+                self._get_reconfigure_subentry(),
+                data=self._data,
+                unique_id=f"{self._data[CONF_UNIT]}:{self._data[CONF_CHANNEL]}",
+            )
         return await self.async_step_settings()
 
     async def async_step_pair_retry(
@@ -566,6 +584,41 @@ class CoverSubentryFlow(ConfigSubentryFlow):
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
+        """Choose between changing the settings and pairing the cover again."""
+        return self.async_show_menu(
+            step_id="reconfigure", menu_options=["reconfigure_settings", "repair"]
+        )
+
+    async def async_step_repair(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Pair the cover again, keeping its device and entities."""
+        if self._get_entry().state is not ConfigEntryState.LOADED:
+            return self.async_abort(reason="entry_not_loaded")
+        subentry = self._get_reconfigure_subentry()
+        current = (subentry.data[CONF_UNIT], subentry.data[CONF_CHANNEL])
+        used = self._used_channels() - {current}
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            unit = int(user_input[CONF_UNIT])
+            channel = int(user_input[CONF_CHANNEL])
+            if (unit, channel) in used:
+                errors["base"] = "channel_in_use"
+            else:
+                self._title = subentry.title
+                self._data = {**subentry.data, CONF_UNIT: unit, CONF_CHANNEL: channel}
+                return await self.async_step_pair()
+
+        return self.async_show_form(
+            step_id="repair",
+            data_schema=vol.Schema(_unit_channel_fields(*current)),
+            errors=errors,
+            description_placeholders={"used_channels": _format_used(used)},
+        )
+
+    async def async_step_reconfigure_settings(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
         """Reconfigure the settings of an existing cover."""
         subentry = self._get_reconfigure_subentry()
         errors: dict[str, str] = {}
@@ -586,5 +639,5 @@ class CoverSubentryFlow(ConfigSubentryFlow):
             self._settings_schema(), dict(subentry.data)
         )
         return self.async_show_form(
-            step_id="reconfigure", data_schema=schema, errors=errors
+            step_id="reconfigure_settings", data_schema=schema, errors=errors
         )
