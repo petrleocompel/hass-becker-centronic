@@ -58,7 +58,7 @@
       "step": {
         "user": {
           "title": "Add a Becker cover",
-          "description": "The stick emulates 5 remote units with 7 channels each. Pick a free unit/channel for this cover.\n\nChannels already in use: {used_channels}",
+          "description": "The stick emulates 5 remote units with 7 channels each. All channels of a unit share one rolling counter, so give each cover a unit of its own while units are free (the suggestion does).\n\nChannels already in use: {used_channels}",
           "data": {
             "name": "Name",
             "unit": "Unit",
@@ -108,8 +108,15 @@
           }
         },
         "reconfigure": {
+          "title": "Configure cover",
+          "menu_options": {
+            "reconfigure_settings": "Change the cover behavior",
+            "repair": "Pair the cover again (keeps the device and its entities)"
+          }
+        },
+        "reconfigure_settings": {
           "title": "Cover behavior",
-          "description": "Adjust the behavior of this cover. Unit and channel cannot be changed - add a new cover instead.",
+          "description": "Adjust the behavior of this cover.",
           "data": {
             "travelling_time_up": "Travel time up",
             "travelling_time_down": "Travel time down",
@@ -120,6 +127,14 @@
             "tilt_time_blind": "Blind tilt time",
             "remote_ids": "Remote IDs to track",
             "value_template": "Position value template"
+          }
+        },
+        "repair": {
+          "title": "Pair the cover again",
+          "description": "Use this when the cover no longer reacts even after **Resync**. The device, its entities and their history stay the same.\n\nKeep the unit/channel to re-learn the same address, or pick a free one (a unit of its own is recommended). Channels used by other covers: {used_channels}",
+          "data": {
+            "unit": "Unit",
+            "channel": "Channel"
           }
         }
       },
@@ -161,7 +176,7 @@
   "services": {
     "resync": {
       "name": "Resync",
-      "description": "Repeats the STOP command 3 times so the receiver re-adopts the stick's rolling code counter. Use when a cover stopped responding to the stick."
+      "description": "Repeats the STOP command 5 times, 0.5-0.9 s apart, so the receiver re-adopts the stick's rolling code counter. Use when a cover stopped responding to the stick."
     },
     "unpair": {
       "name": "Unpair",

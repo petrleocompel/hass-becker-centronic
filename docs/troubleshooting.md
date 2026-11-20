@@ -31,9 +31,10 @@ ignored.
 
 **Fix: press the cover's "Resync" button** (on the cover's device page,
 under *Configuration*), or call the `becker_centronic.resync` action on the
-cover entity. This repeats STOP three times, which forces the receiver to
-re-adopt the stick's current counter. The cover may briefly stop/jerk -
-that's expected.
+cover entity. This repeats STOP five times, 0.5-0.9 s apart, which forces
+the receiver to re-adopt the stick's current counter. The cover may briefly
+stop/jerk - that's expected. A command sent right after Resync waits until
+the STOPs are out (a few seconds); there is no need to press twice.
 
 If resync does not help, the pairing itself may be lost - run the pairing
 wizard again (delete the cover, **Add cover**).

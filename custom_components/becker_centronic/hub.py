@@ -37,6 +37,7 @@ from .const import (
 from .protocol import (
     CLEARPOS_SEQUENCE,
     DEFAULT_TRAIN_VARIANT,
+    INCREMENT_WINDOW,
     REMOVE_SEQUENCE,
     TRAIN_MASTER_SEQUENCE,
     TRAIN_SEQUENCES,
@@ -60,6 +61,14 @@ CONNECT_TIMEOUT = 10.0
 RECONNECT_BACKOFF_MAX = 60.0
 QUEUE_SIZE = 100
 RECENT_PACKETS = 50
+
+# Resync before the next frame could fall outside the receiver's acceptance
+# window; the headroom covers frames the receiver missed (RF, dropped link).
+RESYNC_GAP = INCREMENT_WINDOW - 9
+# Five HALTs 0.5-0.9 s apart make receivers adopt the counter (proven with Roto
+# covers by the previous integration; three quick HALTs are not enough there).
+# The gap holds on air, towards frames of other covers too.
+RESYNC_FRAMES = 5
 
 
 class CannotConnect(HomeAssistantError):
@@ -134,10 +143,14 @@ class BeckerHub:
         self._config = config
         self.store = store
         self._parser = PacketParser()
-        self._queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=QUEUE_SIZE)
+        # Packets with the quiet air (seconds) they need on both sides
+        self._queue: asyncio.Queue[tuple[bytes, float]] = asyncio.Queue(
+            maxsize=QUEUE_SIZE
+        )
         self._runner: asyncio.Task | None = None
         self._closed = False
         self._connected = False
+        self._last_tx_time = float("-inf")
         self._next_tx_time = 0.0
         self.recent_packets: deque[dict[str, Any]] = deque(maxlen=RECENT_PACKETS)
 
@@ -232,13 +245,17 @@ class BeckerHub:
     async def _sender(self, writer: asyncio.StreamWriter) -> None:
         """Send queued packets with enforced pacing."""
         while True:
-            packet = await self._queue.get()
+            packet, quiet = await self._queue.get()
             try:
+                self._next_tx_time = max(
+                    self._next_tx_time, self._last_tx_time + quiet
+                )
                 while (delay := self._next_tx_time - self._hass.loop.time()) > 0:
                     await asyncio.sleep(delay)
                 writer.write(packet)
                 await writer.drain()
-                self._next_tx_time = self._hass.loop.time() + TX_GAP
+                self._last_tx_time = self._hass.loop.time()
+                self._next_tx_time = self._last_tx_time + max(TX_GAP, quiet)
                 _LOGGER.debug("Sent packet: %s", packet)
             finally:
                 self._queue.task_done()
@@ -276,12 +293,18 @@ class BeckerHub:
 
     # ---------------------------------------------------------------- sending
 
-    def _queue_command(self, unit: int, channel: int, command: Command) -> None:
-        """Encode one command with the next increment and queue it."""
-        increment = self.store.take_increment(unit)
+    def _queue_command(
+        self, unit: int, channel: int, command: Command, quiet: float = 0.0
+    ) -> None:
+        """Encode one command with the next increment and queue it.
+
+        `quiet` keeps that many seconds free of other frames on air before and
+        after this one.
+        """
+        increment = self.store.take_increment(unit, channel)
         packet = encode_packet(self.store.unit_code(unit), increment, channel, command)
         try:
-            self._queue.put_nowait(packet)
+            self._queue.put_nowait((packet, quiet))
         except asyncio.QueueFull as err:
             raise HomeAssistantError(
                 "Becker Centronic command queue is full; the stick seems unresponsive"
@@ -289,10 +312,21 @@ class BeckerHub:
         self._record_packet("tx", unit, channel, command.name.lower())
 
     async def async_send_sequence(
-        self, unit: int, channel: int, commands: Iterable[Command]
+        self,
+        unit: int,
+        channel: int,
+        commands: Iterable[Command],
+        *,
+        resync_if_needed: bool = True,
     ) -> None:
-        """Queue a sequence of commands."""
+        """Queue a sequence of commands, resyncing the receiver first if needed.
+
+        Everything is queued at once, so no frame of another cover lands between
+        a resync's HALTs or between them and the command.
+        """
         self._ensure_unit_seeded(unit)
+        if resync_if_needed and self._needs_resync(unit, channel):
+            self._queue_resync_ritual(unit, channel)
         for command in commands:
             self._queue_command(unit, channel, command)
 
@@ -301,20 +335,36 @@ class BeckerHub:
             _LOGGER.info("Initializing unit %s with a fresh increment", unit)
             self.store.seed_unit(unit)
 
-    async def async_ensure_unit_synced(self, unit: int) -> None:
-        """Initialize a fresh unit and send sync calls (needed for Roto covers).
+    def _needs_resync(self, unit: int, channel: int) -> bool:
+        gap = self.store.channel_gap(unit, channel)
+        if gap is not None and gap <= RESYNC_GAP:
+            return False
+        _LOGGER.info(
+            "Unit %s channel %s: counter is %s ahead of the last frame on this "
+            "channel, resyncing the receiver",
+            unit,
+            channel,
+            "an unknown amount" if gap is None else gap,
+        )
+        return True
 
-        Ports the behavior of the previous integration: seed the increment and
-        send 5 HALT commands with randomized delays so receivers adopt it.
+    def _queue_resync_ritual(self, unit: int, channel: int) -> None:
+        """Queue HALTs with randomized quiet air so the receiver adopts the counter.
+
+        The sender keeps the quiet air on both sides of each HALT, also towards
+        frames of other covers queued ahead or after.
         """
-        if self.store.is_configured(unit):
-            return
-        self.store.seed_unit(unit)
-        for attempt in range(1, 6):
-            _LOGGER.debug("Unit %s init call #%d", unit, attempt)
-            self._queue_command(unit, 1, Command.HALT)
+        for attempt in range(1, RESYNC_FRAMES + 1):
             # 0.5 to 0.9 seconds between calls (works with Roto covers)
-            await asyncio.sleep(randrange(5, 10) / 10)
+            quiet = randrange(5, 10) / 10
+            _LOGGER.debug(
+                "Unit %s channel %s resync call #%d (%.1f s quiet air)",
+                unit,
+                channel,
+                attempt,
+                quiet,
+            )
+            self._queue_command(unit, channel, Command.HALT, quiet=quiet)
 
     # Cover commands
 
@@ -355,33 +405,41 @@ class BeckerHub:
     ) -> None:
         """Send a TRAIN (pair) sequence while the receiver is in pairing mode."""
         sequence = TRAIN_SEQUENCES[variant]
-        await self.async_send_sequence(unit, channel, sequence)
+        await self.async_send_sequence(
+            unit, channel, sequence, resync_if_needed=False
+        )
         self.store.set_configured(unit)
         # Wait until the sequence has actually been transmitted
         await self._async_wait_sent()
 
     async def async_unpair(self, unit: int, channel: int) -> None:
         """Send a REMOVE sequence while the receiver is in pairing mode."""
-        await self.async_send_sequence(unit, channel, REMOVE_SEQUENCE)
+        await self.async_send_sequence(
+            unit, channel, REMOVE_SEQUENCE, resync_if_needed=False
+        )
         await self._async_wait_sent()
 
     async def async_train_master(self, unit: int, channel: int) -> None:
         """Register the stick as master sender (TRAINMASTER)."""
-        await self.async_send_sequence(unit, channel, TRAIN_MASTER_SEQUENCE)
+        await self.async_send_sequence(
+            unit, channel, TRAIN_MASTER_SEQUENCE, resync_if_needed=False
+        )
         self.store.set_configured(unit)
         await self._async_wait_sent()
 
     async def async_clear_position(self, unit: int, channel: int) -> None:
         """Send a CLEARPOS sequence (clears end positions in the receiver)."""
-        await self.async_send_sequence(unit, channel, CLEARPOS_SEQUENCE)
+        await self.async_send_sequence(
+            unit, channel, CLEARPOS_SEQUENCE, resync_if_needed=False
+        )
         await self._async_wait_sent()
 
     async def async_resync(self, unit: int, channel: int) -> None:
         """Force the receiver to re-adopt the current increment.
 
-        Repeating a command 3 times in a row makes the receiver accept the
-        sender's current increment (documented in centronic TECHNICAL.md).
+        Repeating a command makes the receiver accept the sender's current
+        increment (documented in centronic TECHNICAL.md for 3 repeats; Roto
+        receivers need 5 spaced out).
         """
-        await self.async_send_sequence(
-            unit, channel, (Command.HALT, Command.HALT, Command.HALT)
-        )
+        self._ensure_unit_seeded(unit)
+        self._queue_resync_ritual(unit, channel)

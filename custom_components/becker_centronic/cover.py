@@ -90,8 +90,6 @@ async def async_setup_entry(
     for subentry_id, subentry in entry.subentries.items():
         if subentry.subentry_type != SUBENTRY_TYPE_COVER:
             continue
-        # Initialize fresh units so receivers adopt the increment counter
-        await hub.async_ensure_unit_synced(subentry.data[CONF_UNIT])
         async_add_entities(
             [BeckerCover(hub, entry.entry_id, subentry)],
             config_subentry_id=subentry_id,
@@ -309,7 +307,7 @@ class BeckerCover(CoverEntity, RestoreEntity):
     # Maintenance actions (entity services)
 
     async def async_resync(self) -> None:
-        """Repeat HALT 3x to force the receiver to adopt the increment."""
+        """Send the HALT resync ritual so the receiver adopts the increment."""
         await self._hub.async_resync(self._unit, self._channel)
 
     async def async_unpair(self) -> None:
