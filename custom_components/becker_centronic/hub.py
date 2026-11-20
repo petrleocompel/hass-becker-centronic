@@ -11,7 +11,7 @@ import asyncio
 import contextlib
 import logging
 import socket
-from collections import defaultdict, deque
+from collections import deque
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from random import randrange
@@ -67,6 +67,7 @@ RECENT_PACKETS = 50
 RESYNC_GAP = INCREMENT_WINDOW - 9
 # Five HALTs 0.5-0.9 s apart make receivers adopt the counter (proven with Roto
 # covers by the previous integration; three quick HALTs are not enough there).
+# The gap holds on air, towards frames of other covers too.
 RESYNC_FRAMES = 5
 
 
@@ -142,12 +143,14 @@ class BeckerHub:
         self._config = config
         self.store = store
         self._parser = PacketParser()
-        self._queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=QUEUE_SIZE)
-        # Frames of one unit must not interleave with a resync of one of its channels
-        self._unit_locks: defaultdict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
+        # Packets with the quiet air (seconds) they need on both sides
+        self._queue: asyncio.Queue[tuple[bytes, float]] = asyncio.Queue(
+            maxsize=QUEUE_SIZE
+        )
         self._runner: asyncio.Task | None = None
         self._closed = False
         self._connected = False
+        self._last_tx_time = float("-inf")
         self._next_tx_time = 0.0
         self.recent_packets: deque[dict[str, Any]] = deque(maxlen=RECENT_PACKETS)
 
@@ -242,13 +245,17 @@ class BeckerHub:
     async def _sender(self, writer: asyncio.StreamWriter) -> None:
         """Send queued packets with enforced pacing."""
         while True:
-            packet = await self._queue.get()
+            packet, quiet = await self._queue.get()
             try:
+                self._next_tx_time = max(
+                    self._next_tx_time, self._last_tx_time + quiet
+                )
                 while (delay := self._next_tx_time - self._hass.loop.time()) > 0:
                     await asyncio.sleep(delay)
                 writer.write(packet)
                 await writer.drain()
-                self._next_tx_time = self._hass.loop.time() + TX_GAP
+                self._last_tx_time = self._hass.loop.time()
+                self._next_tx_time = self._last_tx_time + max(TX_GAP, quiet)
                 _LOGGER.debug("Sent packet: %s", packet)
             finally:
                 self._queue.task_done()
@@ -286,12 +293,18 @@ class BeckerHub:
 
     # ---------------------------------------------------------------- sending
 
-    def _queue_command(self, unit: int, channel: int, command: Command) -> None:
-        """Encode one command with the next increment and queue it."""
+    def _queue_command(
+        self, unit: int, channel: int, command: Command, quiet: float = 0.0
+    ) -> None:
+        """Encode one command with the next increment and queue it.
+
+        `quiet` keeps that many seconds free of other frames on air before and
+        after this one.
+        """
         increment = self.store.take_increment(unit, channel)
         packet = encode_packet(self.store.unit_code(unit), increment, channel, command)
         try:
-            self._queue.put_nowait(packet)
+            self._queue.put_nowait((packet, quiet))
         except asyncio.QueueFull as err:
             raise HomeAssistantError(
                 "Becker Centronic command queue is full; the stick seems unresponsive"
@@ -306,13 +319,16 @@ class BeckerHub:
         *,
         resync_if_needed: bool = True,
     ) -> None:
-        """Queue a sequence of commands, resyncing the receiver first if needed."""
-        async with self._unit_locks[unit]:
-            self._ensure_unit_seeded(unit)
-            if resync_if_needed and self._needs_resync(unit, channel):
-                await self._async_resync_ritual(unit, channel)
-            for command in commands:
-                self._queue_command(unit, channel, command)
+        """Queue a sequence of commands, resyncing the receiver first if needed.
+
+        Everything is queued at once, so no frame of another cover lands between
+        a resync's HALTs or between them and the command.
+        """
+        self._ensure_unit_seeded(unit)
+        if resync_if_needed and self._needs_resync(unit, channel):
+            self._queue_resync_ritual(unit, channel)
+        for command in commands:
+            self._queue_command(unit, channel, command)
 
     def _ensure_unit_seeded(self, unit: int) -> None:
         if not self.store.is_configured(unit):
@@ -332,13 +348,23 @@ class BeckerHub:
         )
         return True
 
-    async def _async_resync_ritual(self, unit: int, channel: int) -> None:
-        """Send HALTs with randomized delays so the receiver adopts the counter."""
+    def _queue_resync_ritual(self, unit: int, channel: int) -> None:
+        """Queue HALTs with randomized quiet air so the receiver adopts the counter.
+
+        The sender keeps the quiet air on both sides of each HALT, also towards
+        frames of other covers queued ahead or after.
+        """
         for attempt in range(1, RESYNC_FRAMES + 1):
-            _LOGGER.debug("Unit %s channel %s resync call #%d", unit, channel, attempt)
-            self._queue_command(unit, channel, Command.HALT)
             # 0.5 to 0.9 seconds between calls (works with Roto covers)
-            await asyncio.sleep(randrange(5, 10) / 10)
+            quiet = randrange(5, 10) / 10
+            _LOGGER.debug(
+                "Unit %s channel %s resync call #%d (%.1f s quiet air)",
+                unit,
+                channel,
+                attempt,
+                quiet,
+            )
+            self._queue_command(unit, channel, Command.HALT, quiet=quiet)
 
     # Cover commands
 
@@ -415,6 +441,5 @@ class BeckerHub:
         increment (documented in centronic TECHNICAL.md for 3 repeats; Roto
         receivers need 5 spaced out).
         """
-        async with self._unit_locks[unit]:
-            self._ensure_unit_seeded(unit)
-            await self._async_resync_ritual(unit, channel)
+        self._ensure_unit_seeded(unit)
+        self._queue_resync_ritual(unit, channel)

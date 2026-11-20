@@ -176,7 +176,7 @@
   "services": {
     "resync": {
       "name": "Resync",
-      "description": "Repeats the STOP command 3 times so the receiver re-adopts the stick's rolling code counter. Use when a cover stopped responding to the stick."
+      "description": "Repeats the STOP command 5 times, 0.5-0.9 s apart, so the receiver re-adopts the stick's rolling code counter. Use when a cover stopped responding to the stick."
     },
     "unpair": {
       "name": "Unpair",

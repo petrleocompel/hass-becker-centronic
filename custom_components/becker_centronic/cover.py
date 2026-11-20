@@ -307,7 +307,7 @@ class BeckerCover(CoverEntity, RestoreEntity):
     # Maintenance actions (entity services)
 
     async def async_resync(self) -> None:
-        """Repeat HALT 3x to force the receiver to adopt the increment."""
+        """Send the HALT resync ritual so the receiver adopts the increment."""
         await self._hub.async_resync(self._unit, self._channel)
 
     async def async_unpair(self) -> None:
